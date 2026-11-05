@@ -262,8 +262,36 @@ static void res_check(id r, const char *what, int reg) {
         MLOG("[RED] missing residency #%d: %s slot %d %s %p (parent chain %d deep) allocated %lu B storage mode %lu%s", nbad, what, reg, is_tex ? "texture" : "buffer", (__bridge void *)a, hops, (unsigned long)a.allocatedSize, (unsigned long)a.storageMode,
              t ? [NSString stringWithFormat:@" format %lu %lux%lu type %lu usage %#lx", (unsigned long)t.pixelFormat, (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.textureType, (unsigned long)t.usage].UTF8String : ""); }
 }
+// GPU memory stop (the Mac): past Metal's recommended working set the kernel may fail to wire what a residency commit adds (`Group Add Resources Failed`), command buffers fail with
+// kIOGPUCommandBufferCallbackErrorOutOfMemory, and the kernel then retries wiring for minutes (`IOGPUScheduler::freeToWireMemory: failed to wire down memory`), even after the process
+// has exited: the Mac froze and needed a hard restart (Ocarina of Time on a 16 GB M4; aCidcOde on a 24 GB M4 Pro, seedds/nxnative#1326). currentAllocatedSize counts a resource before
+// the commit that wires it, so the host stops, with the residency set's largest objects in the log, before a commit takes GPU allocated past the stop, when the 100 ms check finds it
+// there, and at the first GPU out-of-memory error. The stop is the recommended working set; DM_GPU_MEM_STOP=<MB> sets another, 0 turns the stop off. A guard, not a fix: what fills the
+// memory is the game's note's and the reference's business
+static uint64_t g_gpu_stop;
+static void res_top(const char *why);
+static void gpu_mem_stop(const char *why) {
+    static _Atomic int stopping; if (atomic_exchange(&stopping, 1)) for (;;) pause();   // another thread is stopping the process
+    MLOG("[RED] GPU memory stop (%s): GPU allocated %llu MB, the stop is %llu MB (Metal's recommended working set %llu MB; DM_GPU_MEM_STOP=<MB> to change, 0 for none): exiting before the kernel fails to wire memory",
+         why, (unsigned long long)(g_dev.currentAllocatedSize >> 20), (unsigned long long)(g_gpu_stop >> 20), (unsigned long long)(g_dev.recommendedMaxWorkingSetSize >> 20));
+    res_top("[RED] GPU memory stop");
+    fflush(stdout); fflush(stderr); _exit(3);
+}
+static void gpu_mem_stop_init(void) {
+#if !TARGET_OS_IPHONE
+    const char *e = getenv("DM_GPU_MEM_STOP");
+    g_gpu_stop = e && *e ? strtoull(e, NULL, 0) << 20 : g_dev.recommendedMaxWorkingSetSize;
+    if (!g_gpu_stop) return;
+    dispatch_source_t t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+    dispatch_source_set_timer(t, dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), 100 * NSEC_PER_MSEC, 10 * NSEC_PER_MSEC);
+    dispatch_source_set_event_handler(t, ^{ if (g_dev.currentAllocatedSize >= g_gpu_stop) gpu_mem_stop("the 100 ms check"); });
+    dispatch_resume(t);
+    static __strong dispatch_source_t keep; keep = t;
+#endif
+}
 static void res_commit(void) {
     pthread_mutex_lock(&g_res_mu);
+    if (g_res_dirty && g_gpu_stop && g_dev.currentAllocatedSize >= g_gpu_stop) { pthread_mutex_unlock(&g_res_mu); gpu_mem_stop("a residency commit"); }
     if (g_res_dirty) { uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW); [g_res commit]; g_res_dirty = 0; g_rs_commits++; g_rs_commit_ns += clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0; }
     pthread_mutex_unlock(&g_res_mu);
 }
@@ -289,6 +317,7 @@ void dm_gfx_restop(void) { res_top("DM_CTL restop"); }
 static void res_top_once(NSError *err) {
     static _Atomic int done; if (!err || !strstr(err.description.UTF8String, "OutOfMemory") || atomic_exchange(&done, 1)) return;
     res_top("[RED] GPU out of memory");
+    if (g_gpu_stop) gpu_mem_stop("the first GPU out-of-memory error");
 }
 // Since the last call: residency commits (count, time), additions by source line (count, MB; the four largest by bytes) and removals
 void mtl_res_stats(char *out, size_t n) {
@@ -431,6 +460,7 @@ void mtl_init(void) {
     g_dev = MTLCreateSystemDefaultDevice();
     if (!g_dev) MDIE("no Metal device");
     if (!g_dev.hasUnifiedMemory) MDIE("needs a unified-memory device (zero-copy memory pools)");
+    gpu_mem_stop_init();
     g_q = [g_dev newCommandQueue];
     // A device without Metal 4 (the paravirtualized GPU of a virtual Mac, such as GitHub's macos-26 runner: no residency set, no MTL4CommandQueue) cannot run the NVN layer. The GL and
     // Vulkan layers draw on classic queues of their own and need only the device (mtl_device_classic): there the classic part starts and presents are dropped, which is all a
