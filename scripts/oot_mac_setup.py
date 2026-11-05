@@ -94,7 +94,7 @@ def main():
     STATE.parent.mkdir(parents=True, exist_ok=True)
     STATE.write_text(json.dumps({'repo': str(repo), 'app': str(app)}))
     say('building the game: about an hour on an M1 Pro, the Mac stays awake meanwhile (keep it plugged in, lid open)')
-    run('caffeinate', '-ims', py, 'scripts/build_ipa_from_nsp.py', nup, '--platform', 'mac-app', '-o', app, *(['--allow-other-metal'] if other_metal(repo) else []), cwd=repo)
+    run('caffeinate', '-ims', py, 'scripts/build_ipa_from_nsp.py', nup, '--platform', 'mac-app', '--env-file', 'scripts/oot_mac.env', '-o', app, *(['--allow-other-metal'] if other_metal(repo) else []), cwd=repo)
     say(f'done: {app}\nPlay with: python3 {repo}/scripts/oot_mac_play.py')
 
 
