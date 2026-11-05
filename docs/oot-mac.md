@@ -1,0 +1,33 @@
+# Ocarina of Time on the Mac, in two commands
+
+Two scripts take a Mac from nothing to The Legend of Zelda: Ocarina of Time (Switch 2, `0400486024DEC000`) as a Mac app. This is a fork: upstream [nxnative](https://github.com/seedds/nxnative) has not merged this game's support yet, and the `oot-mac` branch gathers the open work of several contributors. Expect an unfinished game (see [PR #1299](https://github.com/seedds/nxnative/pull/1299) and [issue #1265](https://github.com/seedds/nxnative/issues/1265)). Bugs of this branch belong here, not upstream.
+
+## What you need
+
+- A Mac with Apple silicon and Xcode, opened once. Xcode 27.2 is the tested one; with another the script adds `--allow-other-metal`, and the graphics may differ.
+- Your own copy of the game as one `.nup` file. No `prod.keys`. Neither the game nor keys belong in this repository or its issues.
+- About twice the game's size plus 10 GB of free disk.
+- 24 GB of memory or more is recommended. On 16 GB Macs testers report heavy swapping and GPU out-of-memory stops at scene changes, and a kernel panic in the GPU driver was reported on a 24 GB Mac. Save your work before playing.
+
+## Install and build
+
+Everything else is installed for you: Homebrew, the tools, the Metal toolchain and a clone in `~/nxnative-oot`. The build took about an hour on an M1 Pro; keep the Mac plugged in with the lid open. It stays awake by itself.
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/LeonardoBai12/nxnative/oot-mac/scripts/oot_mac_setup.py
+python3 oot_mac_setup.py ~/Games/ocarina.nup
+```
+
+If it stops, run the same command again: finished steps are skipped. The app appears beside the `.nup`, as `Zelda OOT.app`.
+
+## Play
+
+```sh
+python3 ~/nxnative-oot/scripts/oot_mac_play.py
+```
+
+## What the branch holds
+
+On PR #1299's head, in this order: the removal of its duplicate `ListVirtualInputDevices` hook, #1345, #1353, #1312, #1300, the float add atomics and Metal bracket depth branches of `lunks/nxnative`, the shader translator rebuilt from that merged source, and a guard that lets the macOS 26 SDK compile MetalFX's macOS 27 properties. Conflicts were only in docs and generated files, which keep this branch's side.
+
+Not included: `lunks/nxnative`'s `pr/gmem-pool-table`, which conflicts with #1299's pool table. Without it, memory pools past 4,095 are left out: floors can disappear after some minutes of play, and loading a save may hang the GPU.
