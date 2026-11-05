@@ -1,5 +1,7 @@
 # nxnative
 
+> **This fork's `oot-mac` branch:** The Legend of Zelda: Ocarina of Time (Switch 2) on the Mac, in two commands: [docs/oot-mac.md](docs/oot-mac.md). Unfinished and not part of upstream.
+
 Play your own Nintendo Switch games natively on iPhone and iPad. Bring your game (its NSP files) and your `prod.keys`; one script turns them into an IPA that you sideload.
 
 It is not an emulator: the game's own code runs directly on the Apple chip, with Switch graphics rebuilt on Metal. Nothing from any game is in this repository, and the project is not affiliated with Nintendo or any game publisher.
