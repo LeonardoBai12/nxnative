@@ -28,8 +28,8 @@ python3 ~/nxnative-oot/scripts/oot_mac_play.py
 
 ## What the branch holds
 
-On PR #1299's head, in this order: the removal of its duplicate `ListVirtualInputDevices` hook, #1345, #1353, #1312, #1300, #1376, #1331, #1377, #1379, the float add atomics and Metal bracket depth branches of `lunks/nxnative`, the shader translator rebuilt from that merged source, and a guard that lets the macOS 26 SDK compile MetalFX's macOS 27 properties. Conflicts were only in docs and generated files, which keep this branch's side.
+On stan69b's `oot-clean` (#1299, #1300, #1312, #1320, #1353, the pool table, float atomics, ATOMG.CAS and the memory work): #1345, #1343, #1376, #1331, #1377 and #1379, the shader translator rebuilt from that merged source, and a guard that lets the macOS 26 SDK compile MetalFX's macOS 27 properties. Conflicts were only in docs and generated files, which keep this branch's side.
 
 This branch also skips the movie library's NDVE network, on by default through `scripts/oot_mac.env` (`DM_NVN_NDVE_MOVIE_DIRECT=1`): the decoded frame is scaled straight to the output. On GPUs without tensor cores that network is nearly all of a movie frame ([issue #1375](https://github.com/seedds/nxnative/issues/1375)), and the title screen's background is such a movie. The picture loses the filter, a small difference. A workaround, not a fix of the network's speed.
 
-Not included: `lunks/nxnative`'s `pr/gmem-pool-table`, which conflicts with #1299's pool table. Without it, memory pools past 4,095 are left out: floors can disappear after some minutes of play, and loading a save may hang the GPU.
+The filmed scenes run at full speed, but the real-time 3D scenes depend on the GPU: about 20 fps were measured on an M1 Pro before this base.
