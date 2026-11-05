@@ -177,6 +177,14 @@ The game may also write into an NVN object directly, without an NVN call, throug
 - **Check:** `make -C dm/gfx/tests GAME=<id> check_t_cpu_tex` walks 528 finalized descriptors twice in one submission and checks that both walks use the same textures without a second upload, then checks that the temporary references are cleared at commit.
 - **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md).
 
+### Retired texture IDs re-created over storage another texture took
+
+- **Symptom:** GPU memory and the residency set climb in bursts while the player only walks (no asset streaming), long frames come with them, and on a Mac short of memory a command buffer fails with `kIOGPUCommandBufferCallbackErrorOutOfMemory`. In the `memory up to frame` line, `private textures made` and `on storage takeover` climb together.
+- **Cause:** a texture ID stays registered after its texture object is finalized, and its copied descriptor is resolved by every whole pool walk (`pool_gpu`). When a texture of another description takes over that storage, `alias_take_over` drops the old entry from the sharing table and bumps `g_ser_gen` without a note, so the next table is built whole. Each retired ID whose entry went then got a new zero-filled private texture in `tex_mtl_`, whose own takeover evicted idle entries of IDs further on in the same walk, made again when the walk reached them. None of those textures held anything: on NVN the bytes belong to the texture that took the storage, and the host had filled them with zeros.
+- **Fix:** `alias_take_over` records the keys it evicts (`g_alias_gone`, until the key is made again or its pool goes; at most 65,536 keys). A retired ID (`treg_tex` → `tex_mtl_retired`) whose key is there reads as an empty slot, the dummy texture, as the new texture would have read: 0. It still makes its texture when the storage can give it content (`tex_init_fill_may`), and texture objects and command snapshots make theirs as before. Found and reproduced by aCidcOde ([seedds/nxnative#1326](https://github.com/seedds/nxnative/issues/1326#issuecomment-6667424114)).
+- **Check:** `make -C dm/gfx/tests GAME=<id> check_t_cpu_tex` (`retired_takeover_chain`): 16 storage slots, six rounds of finalized objects of new descriptions over them; whole pool walks made 80 textures for the 96 objects before, none now, and the old IDs read as empty slots.
+- **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md): aCidcOde counted 12,371 such textures (24.8 GB in all) in 300 frames on an M4 Pro.
+
 ### A replay's own objects take serials above a capture's
 
 - **Symptom:** `nvn_replay` aborts on a game's capture with `-[NvProg width]: unrecognized selector` (from `rt_dims`) or `-[NvProg mipmapLevelCount]`: a render target resolves to a program.

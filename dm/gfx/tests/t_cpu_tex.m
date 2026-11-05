@@ -142,6 +142,53 @@ static void finalized_bindless_pool(void) {
     h_nvnMemoryPoolFinalize(&pool);
     defer_drain(); munmap(mem, len);
 }
+// Finalized texture objects whose IDs stay registered, over storage later texture objects of other descriptions take over (aCidcOde's reproduction on seedds/nxnative#1326,
+// Ocarina of Time). A whole pool walk resolves every retired ID: one whose shared texture another texture took over got a new zero-filled Metal texture, whose own takeover evicted
+// the entries of IDs later in the walk, made again in turn: about 12,000 textures and 25 GB in 300 frames of Kokiri Forest. Such an ID now reads as an empty slot
+static void retired_takeover_chain(void) {
+    enum { SLOTS = 16, ROUNDS = 6, STRIDE = 65536, FIRST = 4096 };
+    const size_t len = SLOTS * STRIDE;
+    uint8_t *mem = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+    if (mem == MAP_FAILED) abort();
+    NVNmemoryPool pool = {0};
+    pool_builder_t pb = {.mem = mem, .size = len, .flags = NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS | NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
+    CHECK(h_nvnMemoryPoolInitialize(&pool, (const NVNmemoryPoolBuilder *)&pb), "GPU-only pool initialized");
+    uint64_t made0 = g_stat_tex_new, walk_made = 0, walk_taken = 0; int ok = 1, real_last = 0, real_old = 0;
+    for (int r = 0; r < ROUNDS; r++) {
+        for (int k = 0; k <= ALIAS_IDLE; k++) { mtl_sub_begin(); ok &= mtl_wait(mtl_sub_commit(), 5000000000ull); }   // every entry idle: this round's takeovers spare none
+        mtl_sub_begin();
+        for (int s = 0; s < SLOTS; s++) {   // a new description each round over the same storage: each takes over the last round's entry
+            NVNtextureBuilder tb; NVNtexture tex = {0}; h_nvnTextureBuilderSetDefaults(&tb);
+            h_nvnTextureBuilderSetWidth(&tb, 64); h_nvnTextureBuilderSetHeight(&tb, 32 + r); h_nvnTextureBuilderSetFormat(&tb, NVN_FORMAT_RGBA8);
+            h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_COMPRESSIBLE);
+            h_nvnTextureBuilderSetStorage(&tb, &pool, (ptrdiff_t)s * STRIDE);
+            ok &= h_nvnTextureInitialize(&tex, &tb);
+            mtl_reg_tex(FIRST + r * SLOTS + s, (const tex_t *)&tex, NULL);
+            os_unfair_lock_lock(&g_rmu); ok &= tex_by_id(FIRST + r * SLOTS + s) != nil; os_unfair_lock_unlock(&g_rmu);
+            h_nvnTextureFinalize(&tex);   // the descriptor stays registered
+        }
+        ok &= mtl_wait(mtl_sub_commit(), 5000000000ull);
+        mtl_sub_begin();
+        uint64_t m0 = g_stat_tex_new, a0 = g_alias_taken; __unsafe_unretained id<MTLBuffer> tb = nil;
+        os_unfair_lock_lock(&g_rmu); g_ser_gen++;   // a change without a note: the table is built whole, every ID resolved
+        pool_gpu(0, MTLTextureType2D, NVN_DPF_FLOAT, 0, &tb);
+        const uint64_t *e = (const uint64_t *)((const char *)tb.contents + DMSH_POOL_HEAD), dummy = g_dummy_tex_rid[MTLTextureType2D][NVN_DPF_FLOAT];
+        if (r == ROUNDS - 1) for (int s = 0; s < SLOTS; s++) { real_last += e[FIRST + r * SLOTS + s] != dummy; real_old += e[FIRST + s] != dummy; }
+        os_unfair_lock_unlock(&g_rmu);
+        walk_made += g_stat_tex_new - m0; walk_taken += g_alias_taken - a0;
+        ok &= mtl_wait(mtl_sub_commit(), 5000000000ull) && !mtl_last_commit_error();
+    }
+    printf("retired takeover chain: %llu Metal textures for %d texture objects, %llu made and %llu takeovers in the pool walks\n",
+           (unsigned long long)(g_stat_tex_new - made0), SLOTS * ROUNDS, (unsigned long long)walk_made, (unsigned long long)walk_taken);
+    CHECK(ok, "retired takeover chain: textures, submissions and walks completed");
+    CHECK(walk_made == 0 && walk_taken == 0, "a pool walk makes no texture for a retired ID whose storage another texture took over");
+    CHECK(real_last == SLOTS, "retired IDs whose shared texture still holds the storage resolve to it");
+    CHECK(real_old == 0, "retired IDs whose storage another texture took over read as empty slots");
+    CHECK(g_stat_tex_new - made0 == SLOTS * ROUNDS, "one Metal texture per texture object");
+    for (int i = 0; i < SLOTS * ROUNDS; i++) mtl_reg_tex(FIRST + i, NULL, NULL);
+    h_nvnMemoryPoolFinalize(&pool);
+    defer_drain(); munmap(mem, len);
+}
 // Pool table buffers (ptb_get / ptb_retire): a retired table is reused only after the GPU has completed its fence, only at the same length, stays resident while kept,
 // and past PTB_KEEP the oldest goes to the deferred release (Ocarina of Time's Kokiri Forest made 2-3 new 265 KB tables a frame, each added to and removed from the residency set)
 static int resident(id o) { pthread_mutex_lock(&g_res_mu); int r = [g_res_objects containsObject:o]; pthread_mutex_unlock(&g_res_mu); return r; }
@@ -193,6 +240,6 @@ int main(int argc, const char **argv) { @autoreleasepool {
     CHECK(mtl_cpu_tex_count() == N - 2, "a texture with no serial is not recorded");
     for (int i=0;i<N;i++) mtl_tex_release(&t[i]);
     retired_classification(); descriptor_replacement();
-    if (argc > 1 && !strcmp(argv[1], "--metal")) { mtl_init(); finalized_upload(0); finalized_upload(1); finalized_bindless_pool(); ptb_recycle(); }
+    if (argc > 1 && !strcmp(argv[1], "--metal")) { mtl_init(); finalized_upload(0); finalized_upload(1); finalized_bindless_pool(); retired_takeover_chain(); ptb_recycle(); }
     printf("t_cpu_tex: %d checks, %d failed\n", checks, failed); return failed != 0;
 } }

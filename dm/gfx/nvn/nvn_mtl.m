@@ -1897,6 +1897,10 @@ static void ser_note(uint64_t serial) {
 typedef struct { uint64_t pool; int64_t off; nvn_texdesc d; } alias_key;
 static nvn_hmap g_alias = {.klen = sizeof(alias_key)};
 static nvn_hmap g_alias_seen = {.klen = sizeof(alias_key)};   // key → g_fence + 1 at its last lookup or creation (alias_take_over spares entries looked up lately)
+// Keys whose texture another texture took over (alias_take_over), until the key is made again or its pool goes: a retired texture ID over such a key reads as an empty slot (tex_mtl_).
+// Bounded by ALIAS_GONE_MAX keys; past it the set is emptied and those IDs make their textures as before. Under g_smu
+enum { ALIAS_GONE_MAX = 1 << 16 };
+static nvn_hmap g_alias_gone = {.klen = sizeof(alias_key)};
 // Live GPU-only image descriptions, including those not used yet. A dynamic-resolution family declares its largest image before any particular resolution is used.
 // Keeping only descriptions here lets its first allocation cover that family exactly, without allocating every resolution or rounding to a power of two.
 static nvn_hmap g_image_desc = {.klen = 8};   // serial → malloc'ed tex_t, under g_smu
@@ -1914,6 +1918,7 @@ static void image_desc_drop_pool(const void *pool) {   // caller holds g_smu
 }
 static CFMutableSetRef g_alias_set;   // Textures in the sharing table (non-owning; used to ask "is this shared")
 static uint64_t g_alias_evicted;   // shared textures evicted on pool Finalize so far (for the memory report)
+static uint64_t g_stat_tex_new;     // private textures tex_mtl_ made over a pool's storage (newTextureWithDescriptor)
 static uint64_t g_stat_ghost_skip;   // finalized serials resolved to a shared texture without a ghost entry (tex_mtl_)
 static int alias_has(id o) { return g_alias_set && o && CFSetContainsValue(g_alias_set, (__bridge const void *)o); }
 // On memory pool Finalize, evict the textures built on that pool from the sharing table (collect the keys first, then delete: deletion shifts entries back). The sharing table used not to evict: Mario's pools stay for good, so entries are bounded;
@@ -1941,6 +1946,10 @@ void mtl_alias_drop_pool(const void *pool) {
         defer_obj_release(o);
     }
     if (n) { g_ser_gen++; g_alias_evicted += n; }
+    for (uint32_t i = 0; i < g_alias_gone.cap;) {   // deletion shifts entries: examine this slot again
+        alias_key k; memcpy(&k, g_alias_gone.keys + (size_t)i * g_alias_gone.klen, sizeof k);
+        if (g_alias_gone.vals[i] && k.pool == (uint64_t)(uintptr_t)pool) nvn_hm_del(&g_alias_gone, &k); else i++;
+    }
     pthread_mutex_unlock(&g_smu);
     free(ks);
     cpu_tex_drop_pool(pool);
@@ -1976,6 +1985,8 @@ static void alias_take_over(const alias_key *nk) {
         void *old = nvn_hm_del(&g_alias, &ks[j]);
         if (!old) continue;
         nvn_hm_del(&g_alias_seen, &ks[j]);
+        if (g_alias_gone.n >= ALIAS_GONE_MAX) nvn_hm_clear(&g_alias_gone, NULL);
+        nvn_hm_put(&g_alias_gone, &ks[j], (void *)1);
         id o = CFBridgingRelease(old);
         if (g_alias_set) CFSetRemoveValue(g_alias_set, (__bridge const void *)o);
         if (serial_holds(&g_ghost, o) || serial_holds(&g_ghost_active, o)) defer_obj_unref(o); else defer_obj_release(o);
@@ -3125,9 +3136,10 @@ static int mem_any(const uint8_t *p, uint64_t n) {   // whether any byte is non-
     for (; i < n; i++) if (p[i]) return 1;
     return 0;
 }
-static int tex_init_fill(const tex_t *t, id<MTLTexture> mt) {
+// Whether tex_init_fill may fill a new texture of format pf from its storage: all its tests but whether the storage holds data
+static int tex_init_fill_may(const tex_t *t, MTLPixelFormat pf) {
     if (!t->mem || !t->pool || (t->pool->flags & NVN_MEMORY_POOL_FLAGS_VIRTUAL) || t->has_layout) return 0;
-    if (t->d.samples > 1 || ((int)mt.pixelFormat >= 250 && (int)mt.pixelFormat <= 262)) return 0;   // 250..262: Depth16Unorm … X24_Stencil8 (some names are macOS-only)
+    if (t->d.samples > 1 || ((int)pf >= 250 && (int)pf <= 262)) return 0;   // 250..262: Depth16Unorm … X24_Stencil8 (some names are macOS-only)
     int no_cpu = (t->pool->flags & NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS) != 0, uncached = (t->pool->flags & NVN_MEMORY_POOL_FLAGS_CPU_UNCACHED) != 0;
     // COMPRESSIBLE is a memory-compression hint, not a data format. In a CPU_NO_ACCESS pool the game never writes the storage, so the memory may mean nothing to the CPU (Rhythm Heaven Groove's render
     // targets). In a pool the CPU writes the texels are plain: SD GUNDAM G GENERATION CROSS RAYS (SDK 9.4.1) sets it on every texture it creates in 0xa2 pools and writes ordinary texels into them,
@@ -3135,8 +3147,12 @@ static int tex_init_fill(const tex_t *t, id<MTLTexture> mt) {
     if (no_cpu && (t->d.flags & NVN_TEXTURE_FLAGS_COMPRESSIBLE)) return 0;
     static int flush_fill = -1; if (flush_fill < 0) { const char *e = getenv("DM_NVN_FLUSH_FILL"); flush_fill = !e || atoi(e) != 0; }
     if (!no_cpu && !uncached && (!flush_fill || !nvn_flushed(t->mem, t->L.size))) return 0;
-    if (!atomic_load(&g_sub_thread_set) || !on_sub_thread() || !mem_any(t->mem, t->L.size)) return 0;   // the upload batch belongs to the submit thread
+    return atomic_load(&g_sub_thread_set) && on_sub_thread();   // the upload batch belongs to the submit thread
+}
+static int tex_init_fill(const tex_t *t, id<MTLTexture> mt) {
+    if (!tex_init_fill_may(t, mt.pixelFormat) || !mem_any(t->mem, t->L.size)) return 0;
     if (pkg_upload(t, NULL, mt, 0) != mt) return 0;
+    int no_cpu = (t->pool->flags & NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS) != 0, uncached = (t->pool->flags & NVN_MEMORY_POOL_FLAGS_CPU_UNCACHED) != 0;
     int why = no_cpu ? 0 : uncached ? 1 : 2;
     static uint64_t n[3]; if (n[why]++ < 4) MLOG("initial content: ser=%llu %ux%ux%u format %#x filled from its storage, %s (%llu so far)", (unsigned long long)t->serial, t->d.width, t->d.height, t->d.depth, t->d.format,
                                                  (const char *[]){"a CPU_NO_ACCESS pool's", "a CPU_UNCACHED pool's", "flushed by the CPU before its first use"}[why], (unsigned long long)n[why]);
@@ -3275,8 +3291,9 @@ static void cpu_unc_drop(void) {
     if (n) { static int nl; if (nl++ < 8) MLOG("a pool's first GPU write: %u uncompressed textures taken from its storage are GPU textures from now on", n); }
     free(ser);
 }
-static id<MTLTexture> tex_mtl_(const tex_t *ct);
-static id<MTLTexture> tex_mtl(const tex_t *ct) { AP_B; id<MTLTexture> r = tex_mtl_(ct); AP_E(4); return r; }
+static id<MTLTexture> tex_mtl_(const tex_t *ct, int retired_id);
+static id<MTLTexture> tex_mtl(const tex_t *ct) { AP_B; id<MTLTexture> r = tex_mtl_(ct, 0); AP_E(4); return r; }
+static id<MTLTexture> tex_mtl_retired(const tex_t *ct) { AP_B; id<MTLTexture> r = tex_mtl_(ct, 1); AP_E(4); return r; }   // a retired texture ID's descriptor (treg_tex)
 // A sparse texture is bound from its first level whose pages, and those of every smaller level, are all mapped: a view of levels [r, n) samples as with a minimum LOD of r.
 // The translator drops TEX's LOD clamp and residency predicate, so Monster Hunter Rise's streamed textures were sampled at levels it had not mapped yet; those read 0, which ASTC
 // decodes as its error colour (magenta clothes on the title screen). Single-layer 2D textures only; the view follows each upload, as the mappings change only with one
@@ -3362,7 +3379,8 @@ static const uint8_t *srgb_twins(uint32_t f) {
     });
     return f < 256 ? tw[f] : tw[0];
 }
-static id<MTLTexture> tex_mtl_(const tex_t *ct) {
+static uint64_t g_stat_retired_empty;   // retired texture IDs read as empty slots: their storage another texture took over (tex_mtl_)
+static id<MTLTexture> tex_mtl_(const tex_t *ct, int retired_id) {
     tex_t *t = (tex_t *)ct;
     if (!t || !t->serial) return nil;
     if (on_sub_thread()) cpu_unc_drop();
@@ -3479,7 +3497,7 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
     // made the stencil read zero and rejected every deferred-lighting pass. Actual image writes add Metal usage before opening their encoder (image_prepare).
     ak.d.flags &= ~NVN_TEXTURE_FLAGS_IMAGE;
     pthread_mutex_lock(&g_smu); __unsafe_unretained id shared = hm_get_id(&g_alias, &ak); if (shared) nvn_hm_put(&g_alias_seen, &ak, (void *)(uintptr_t)(g_fence + 1));
-    int live = t->serial >= (1ull << 62) || nvn_hm_get(&g_tex_live, &t->serial); pthread_mutex_unlock(&g_smu);
+    int live = t->serial >= (1ull << 62) || nvn_hm_get(&g_tex_live, &t->serial), taken = !shared && !live && nvn_hm_get(&g_alias_gone, &ak); pthread_mutex_unlock(&g_smu);
     // A finalized object whose descriptor is still registered, over storage a shared texture holds: the sharing table keeps that texture, so the ghost ring (tex_put) would only churn.
     // Ocarina of Time keeps about 12,000 such descriptors, each at the storage of a live texture object; every pool walk put them through the 512-entry ring, about 10,000 puts and
     // 20,000 storage notes a frame, and their views were made again in each submission
@@ -3505,9 +3523,14 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
     if (!mt) {
         MTLTextureDescriptor *d = tex_desc(t, 0);
         if (!d) return nil;
+        // A retired texture ID (its object finalized, its descriptor still registered) over storage another texture took over: on NVN those bytes are the new texture's now, and a
+        // new private texture here could only be zeros nothing names again. Read as an empty slot (0, as that texture would), unless the storage gives it content (tex_init_fill).
+        // Making them took over the storage in turn and evicted the entries of IDs later in the same pool walk, made again when the walk reached them: in Ocarina of Time's Kokiri
+        // Forest, 12,371 textures and 24.8 GB in 300 frames (aCidcOde, seedds/nxnative#1326). Texture objects and command snapshots still make theirs
+        if (retired_id && taken && !tex_init_fill_may(t, d.pixelFormat)) { g_stat_retired_empty++; return nil; }
         mt = image_texture(t, d);
         if (!mt) { mt = [g_dev newTextureWithDescriptor:d];
-            if (mt) { res_add(mt); if (!tex_init_fill(t, mt)) tex_zero_fill(mt); } }
+            if (mt) { res_add(mt); g_stat_tex_new++; if (!tex_init_fill(t, mt)) tex_zero_fill(mt); } }
         if (!mt) { RED_ONCE(2, "failed to create MTLTexture %ux%u format %#x target %d", t->d.width, t->d.height, t->d.format, t->d.target); return nil; }
     }
     if (mt.allocatedSize >= (256u << 20)) { static int nb; if (nb++ < 20)   // the textures that take most of the GPU's memory (a GPU out-of-memory error says nothing of which)
@@ -3519,7 +3542,7 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
     pthread_mutex_lock(&g_smu);
     if (!g_alias_set) g_alias_set = CFSetCreateMutable(NULL, 0, NULL);
     alias_take_over(&ak);
-    hm_put_id(&g_alias, &ak, mt); CFSetAddValue(g_alias_set, (__bridge const void *)mt); nvn_hm_put(&g_alias_seen, &ak, (void *)(uintptr_t)(g_fence + 1));
+    hm_put_id(&g_alias, &ak, mt); CFSetAddValue(g_alias_set, (__bridge const void *)mt); nvn_hm_del(&g_alias_gone, &ak); nvn_hm_put(&g_alias_seen, &ak, (void *)(uintptr_t)(g_fence + 1));
     pthread_mutex_unlock(&g_smu);
     tex_put(t->serial, mt);
     return mt;
@@ -3550,7 +3573,7 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
 #if TARGET_OS_IPHONE
     snprintf(avail, sizeof avail, "%llu MB", (unsigned long long)(os_proc_available_memory() >> 20));
 #endif
-    MLOG("memory up to frame %llu: resident %llu MB, GPU allocated %llu MB, deferred-release queue %lu, residency set %lu, serial objects %u, memory pools %d (resident %d; peak %d / tracking table capacity %d; freed but alive %lu, %llu MB), shared textures %u (%u of them unreferenced; evicted with pools %llu, on storage takeover %llu in total), texture re-uploads %llu in total, per-frame arena blocks created %llu in total, finalized textures still referenced %u (small table, %llu put in total); headroom to the system memory limit %s", frame, rss_mb, gpu, nd, nr, ns, live, pres, peak, cap, dead_n, dead_mb, ashared, aorph, (unsigned long long)g_alias_evicted, (unsigned long long)g_alias_taken, (unsigned long long)g_pkg_reuploads, (unsigned long long)g_arena_made, nghost, (unsigned long long)ghost_puts, avail);
+    MLOG("memory up to frame %llu: resident %llu MB, GPU allocated %llu MB, deferred-release queue %lu, residency set %lu, serial objects %u, memory pools %d (resident %d; peak %d / tracking table capacity %d; freed but alive %lu, %llu MB), shared textures %u (%u of them unreferenced; evicted with pools %llu, on storage takeover %llu in total), texture re-uploads %llu in total, per-frame arena blocks created %llu in total, finalized textures still referenced %u (small table, %llu put in total), private textures made %llu and retired texture IDs read as empty over storage taken over %llu in total; headroom to the system memory limit %s", frame, rss_mb, gpu, nd, nr, ns, live, pres, peak, cap, dead_n, dead_mb, ashared, aorph, (unsigned long long)g_alias_evicted, (unsigned long long)g_alias_taken, (unsigned long long)g_pkg_reuploads, (unsigned long long)g_arena_made, nghost, (unsigned long long)ghost_puts, (unsigned long long)g_stat_tex_new, (unsigned long long)g_stat_retired_empty, avail);
     { void mtl_vc_stats(unsigned *, uint64_t *, uint64_t *), mtl_tb2_stats(uint64_t *, uint64_t *, uint64_t *, uint64_t *, uint64_t *); uint64_t mtl_tex_mis_count(void); unsigned vn; uint64_t vh, vm, tb, tm, tf, tc, tcb;
       mtl_vc_stats(&vn, &vh, &vm); mtl_tb2_stats(&tb, &tm, &tf, &tc, &tcb);
       MLOG("texture views by texture (vc_get): %u textures hold cached views; %llu views reused, %llu made in total; texture buffers bound as 2D rows for wrapped 1D fetches %llu times, %llu made, %llu failed, %llu copied into aligned rows (%llu MB) "
@@ -5320,7 +5343,7 @@ void mtl_set_origin_lower_left(int on) { if (atomic_exchange(&g_origin_ll, on) !
 static int g_queue_origin_ll;   // SET_WINDOW_ORIGIN's raster flip is queue state, independent of later device-origin changes.
 void mtl_set_queue_origin_lower_left(int on) { g_queue_origin_ll = on != 0; }
 void mtl_set_tex_pool_n(int n) { g_tpool_n = n; }
-static id<MTLTexture> treg_tex(const treg_t *r) { return r->gone ? tex_made(&r->t) : tex_mtl(&r->t); }   // Caller holds g_rmu
+static id<MTLTexture> treg_tex(const treg_t *r) { return r->gone ? tex_made(&r->t) : r->retired ? tex_mtl_retired(&r->t) : tex_mtl(&r->t); }   // Caller holds g_rmu
 // The upload stamp of the packaged texture an ID's view was made from (tex_by_id's guest-write shortcut); none for sparse ones (their page table changes too) or another base. Caller holds g_rmu
 static void treg_pkg_stamp(treg_t *rp, id<MTLTexture> base) {
     rp->view_span = NULL; if (!rp->view_pkg) return;
