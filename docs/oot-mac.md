@@ -30,7 +30,7 @@ python3 ~/nxnative-oot/scripts/oot_mac_play.py
 
 On stan69b's `oot-clean` (#1299, #1300, #1312, #1320, #1353, the pool table, float atomics, ATOMG.CAS and the memory work): #1345, #1343, #1376, #1331, #1377 and #1379, the shader translator rebuilt from that merged source, and a guard that lets the macOS 26 SDK compile MetalFX's macOS 27 properties. Conflicts were only in docs and generated files, which keep this branch's side.
 
-This branch also skips the movie library's NDVE network, on by default through `scripts/oot_mac.env` (`DM_NVN_NDVE_MOVIE_DIRECT=1`): the decoded frame is scaled straight to the output. On GPUs without tensor cores that network is nearly all of a movie frame ([issue #1375](https://github.com/seedds/nxnative/issues/1375)), and the title screen's background is such a movie. The picture loses the filter, a small difference. A workaround, not a fix of the network's speed.
+This branch also keeps the game at real speed below 60 fps (see the results below) and skips the movie library's NDVE network, on by default through `scripts/oot_mac.env` (`DM_NVN_NDVE_MOVIE_DIRECT=1`): the decoded frame is scaled straight to the output. On GPUs without tensor cores that network is nearly all of a movie frame ([issue #1375](https://github.com/seedds/nxnative/issues/1375)), and the title screen's background is such a movie. The picture loses the filter, a small difference. A workaround, not a fix of the network's speed.
 
 ## Measured on an M1 Pro with 16 GB
 
@@ -42,7 +42,10 @@ One player's sessions of this branch (Xcode 26.6, macOS 26), not a benchmark:
 | Real-time cutscenes and Kokiri Forest, Handheld | 36 to 58 ms | 19 to 31 fps |
 | Light real-time moments, Handheld | about 7 ms | 48 fps and up |
 
-- **Playable?** Not yet. Below about 30 fps the game runs in slow motion rather than only dropping frames; the cause is not confirmed.
+- **Playable?** Roughly. Link now walks at normal speed at about 20 fps, and collision held up in a 5-minute Handheld session with no GPU hang, but open views still stall.
+- **Slow motion fixed:** the game stepped a fixed amount per frame. Its step now follows the measured frame time (`DM_FRAME_DELTA=0` turns this off), found by gunvalk in [Lichii PR #216](https://github.com/zortos293/Lichii/pull/216). The frame rate does not change.
+- **Stalls in open views:** views of the whole village or the horizon draw about 2,500 times a frame, against about 860, and frames then reach 1 s. In that window 3.3 GB moved in and out of the residency set per 300 frames, with 11.2 GB resident on 16 GB. Other stalls of 1 to 3.5 s are first-time pipeline compiles.
+- **Late ground:** ground can stay missing for a while in some places; the cause is not known.
 - **Collapse to about 4 fps:** in Docked mode after 11 minutes, on a Mac up 88 days, with GPU time at 190 to 350 ms a frame, two Metal GPU hangs and 11.3 GB resident. A restart and Handheld gave a session without it, but that session lasted only about 3.5 minutes, and it had two GPU hangs too.
 - **What helps:** restart the Mac first, close other apps, stay on AC power and choose Handheld. Handheld and MetalFX changed nothing in the movies.
 - **First visits load slowly:** ground and models appear late while new pipelines compile; they are kept for later runs.
