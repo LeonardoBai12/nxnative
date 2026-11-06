@@ -8,7 +8,7 @@ import argparse, json, os, shutil, subprocess, sys
 from pathlib import Path
 
 REPO_URL = 'https://github.com/LeonardoBai12/nxnative.git'
-BRANCH = 'oot-mac3'
+BRANCH = 'oot-mac4'
 STATE = Path.home() / '.config/nxnative-oot.json'   # where oot_mac_play.py finds the app
 BREW_BIN = '/opt/homebrew/bin'
 FORMULAE = ('xcodegen', 'zstd', 'glslang', 'python@3.13', 'dotnet')
