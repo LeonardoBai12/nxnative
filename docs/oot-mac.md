@@ -32,4 +32,18 @@ On stan69b's `oot-clean` (#1299, #1300, #1312, #1320, #1353, the pool table, flo
 
 This branch also skips the movie library's NDVE network, on by default through `scripts/oot_mac.env` (`DM_NVN_NDVE_MOVIE_DIRECT=1`): the decoded frame is scaled straight to the output. On GPUs without tensor cores that network is nearly all of a movie frame ([issue #1375](https://github.com/seedds/nxnative/issues/1375)), and the title screen's background is such a movie. The picture loses the filter, a small difference. A workaround, not a fix of the network's speed.
 
-The filmed scenes run at full speed, but the real-time 3D scenes depend on the GPU: about 20 fps were measured on an M1 Pro before this base.
+## Measured on an M1 Pro with 16 GB
+
+One player's sessions of this branch (Xcode 26.6, macOS 26), not a benchmark:
+
+| Scene | GPU a frame | Frame rate |
+|---|---|---|
+| Movies, title screen, the opening up to Link waking | about 5 ms | 60 fps |
+| Real-time cutscenes and Kokiri Forest, Handheld | 36 to 58 ms | 19 to 31 fps |
+| Light real-time moments, Handheld | about 7 ms | 48 fps and up |
+
+- **Playable?** Not yet. Below about 30 fps the game runs in slow motion rather than only dropping frames; the cause is not confirmed.
+- **Collapse to about 4 fps:** in Docked mode after 11 minutes, on a Mac up 88 days, with GPU time at 190 to 350 ms a frame, two Metal GPU hangs and 11.3 GB resident. A restart and Handheld gave a session without it, but that session lasted only about 3.5 minutes, and it had two GPU hangs too.
+- **What helps:** restart the Mac first, close other apps, stay on AC power and choose Handheld. Handheld and MetalFX changed nothing in the movies.
+- **First visits load slowly:** ground and models appear late while new pipelines compile; they are kept for later runs.
+- `DM_RENDER_SCALE` has no effect on this game: it has no render scale stub.
