@@ -34,7 +34,24 @@ This branch also keeps the game at real speed below 60 fps (see the results belo
 
 ## Measured on an M1 Pro with 16 GB
 
-One player's sessions of the earlier `oot-mac` branch, on an older base, (Xcode 26.6, macOS 26), not a benchmark:
+One player's two sessions of this branch, Handheld, on AC power (Xcode 26.6, macOS 26), not a benchmark. Only the second left a log, about 3.5 minutes at Render scale 0.7:
+
+| | Render scale 1 | Render scale 0.7 |
+|---|---|---|
+| Speed | normal | normal |
+| Ground on arrival | about 10 s late, with a strange light from the ground until then | no visible delay |
+| Water | hitches a little | hardly hitches |
+| Girls pointing at the Deku Tree | no stall | no stall |
+| Frame time in play, per 300 frames (median) | not logged | 27 to 37 ms, 27 to 37 fps |
+
+- **Playable?** Yes in this short test, at both scales: vegetation was right and the white squares did not come back. Render scale 0.7 is the better setting here.
+- **Long frames at 0.7:** the three of 2 to 2.6 s were first-time pipeline compiles, which later runs keep.
+- **One GPU address fault:** 1 of 17,978 command buffers failed, as the first 3D scene loaded. The game went on.
+- **Memory at 0.7:** 9.5 GB resident, 15.2 GB allocated.
+- **Three shaders do not build here:** one opcode 481 entry and two `agl_technique_pfx` compute shaders. Nothing looked wrong for it; `main` has since fixed them.
+- **Not tested here:** long sessions. The collapse below may still happen.
+
+The earlier `oot-mac` branch, on an older base:
 
 | Scene | GPU a frame | Frame rate |
 |---|---|---|
@@ -49,4 +66,4 @@ One player's sessions of the earlier `oot-mac` branch, on an older base, (Xcode 
 - **Collapse to about 4 fps:** in Docked mode after 11 minutes, on a Mac up 88 days, with GPU time at 190 to 350 ms a frame, two Metal GPU hangs and 11.3 GB resident. A restart and Handheld gave a session without it, but that session lasted only about 3.5 minutes, and it had two GPU hangs too.
 - **What helps:** restart the Mac first, close other apps, stay on AC power and choose Handheld. Handheld and MetalFX changed nothing in the movies.
 - **First visits load slowly:** ground and models appear late while new pipelines compile; they are kept for later runs.
-- `DM_RENDER_SCALE` has no effect on this game: it has no render scale stub.
+- **Render scale:** the launcher's setting (`DM_RENDER_SCALE`, 0.5 to 1) lowers the size of the 3D views, from #1497. That earlier branch did not have it.
