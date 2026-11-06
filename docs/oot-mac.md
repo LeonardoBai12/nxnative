@@ -28,7 +28,7 @@ python3 ~/nxnative-oot/scripts/oot_mac_play.py
 
 ## What the branch holds
 
-On current `main`, which now holds this game: #1331 (with any output size, for Handheld), #1453, #1497, #1377, #1379, #1484, #1493, #1503, #1522, #1558, #1390, #1556, #1557, and a guard that lets the macOS 26 SDK compile MetalFX's macOS 27 properties.
+On current `main`, which now holds this game: #1331 (with any output size, for Handheld), #1453, #1497, #1377, #1379, #1484, #1493, #1503, #1522, #1558, #1390, #1556, #1557, #1544, and a guard that lets the macOS 26 SDK compile MetalFX's macOS 27 properties.
 
 This branch also keeps the game at real speed below 60 fps (see the results below) and skips the movie library's NDVE network, on by default through `scripts/oot_mac.env` (`DM_NVN_NDVE_MOVIE_DIRECT=1`): the decoded frame is scaled straight to the output. On GPUs without tensor cores that network is nearly all of a movie frame ([issue #1375](https://github.com/seedds/nxnative/issues/1375)), and the title screen's background is such a movie. The picture loses the filter, a small difference. A workaround, not a fix of the network's speed.
 
