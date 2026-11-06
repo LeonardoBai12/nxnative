@@ -1,6 +1,6 @@
 # Ocarina of Time on the Mac, in two commands
 
-Two scripts take a Mac from nothing to The Legend of Zelda: Ocarina of Time (Switch 2, `0400486024DEC000`) as a Mac app. This is a fork: upstream [nxnative](https://github.com/seedds/nxnative) has not merged this game's support yet, and the `oot-mac4` branch gathers the open work of several contributors. Expect an unfinished game (see [PR #1299](https://github.com/seedds/nxnative/pull/1299) and [issue #1265](https://github.com/seedds/nxnative/issues/1265)). Bugs of this branch belong here, not upstream.
+Two scripts take a Mac from nothing to The Legend of Zelda: Ocarina of Time (Switch 2, `0400486024DEC000`) as a Mac app. This is a fork: upstream [nxnative](https://github.com/seedds/nxnative) has not merged this game's support yet, and the `oot-mac5` branch gathers the open work of several contributors. Expect an unfinished game (see [PR #1299](https://github.com/seedds/nxnative/pull/1299) and [issue #1265](https://github.com/seedds/nxnative/issues/1265)). Bugs of this branch belong here, not upstream.
 
 ## What you need
 
@@ -14,7 +14,7 @@ Two scripts take a Mac from nothing to The Legend of Zelda: Ocarina of Time (Swi
 Everything else is installed for you: Homebrew, the tools, the Metal toolchain and a clone in `~/nxnative-oot`. The build took about an hour on an M1 Pro; keep the Mac plugged in with the lid open. It stays awake by itself.
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/LeonardoBai12/nxnative/oot-mac4/scripts/oot_mac_setup.py
+curl -fsSLO https://raw.githubusercontent.com/LeonardoBai12/nxnative/oot-mac5/scripts/oot_mac_setup.py
 python3 oot_mac_setup.py ~/Games/ocarina.nup
 ```
 
@@ -28,7 +28,7 @@ python3 ~/nxnative-oot/scripts/oot_mac_play.py
 
 ## What the branch holds
 
-On current `main`, which now holds this game: #1331 (with any output size, for Handheld), #1453, #1497, #1377, #1379, #1484, #1493, #1503, #1522, and a guard that lets the macOS 26 SDK compile MetalFX's macOS 27 properties.
+On current `main`, which now holds this game: #1331 (with any output size, for Handheld), #1453, #1497, #1377, #1379, #1484, #1493, #1503, #1522, #1558, #1390, #1556, #1557, and a guard that lets the macOS 26 SDK compile MetalFX's macOS 27 properties.
 
 This branch also keeps the game at real speed below 60 fps (see the results below) and skips the movie library's NDVE network, on by default through `scripts/oot_mac.env` (`DM_NVN_NDVE_MOVIE_DIRECT=1`): the decoded frame is scaled straight to the output. On GPUs without tensor cores that network is nearly all of a movie frame ([issue #1375](https://github.com/seedds/nxnative/issues/1375)), and the title screen's background is such a movie. The picture loses the filter, a small difference. A workaround, not a fix of the network's speed.
 
