@@ -12627,7 +12627,7 @@ static int ndve_direct_draw(NvShader *cs) {
     return ndve_scale(in, out, &desc);
 }
 static int ndve_scale(id<MTLTexture> in, id<MTLTexture> out, const tex_t *desc) {
-    if (in.width != 1920 || in.height != 1080 || out.width != 2560 || out.height != 1440 ||
+    if (in.width != 1920 || in.height != 1080 || !out ||
         !(out.usage & MTLTextureUsageRenderTarget)) return 0;
     zskip_del(desc->serial);
     sparse_gpu_wrote(desc);
@@ -12635,10 +12635,10 @@ static int ndve_scale(id<MTLTexture> in, id<MTLTexture> out, const tex_t *desc) 
     rp_end();
     if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
     ubd_land_compute();
-    const NVNcopyRegion src = {0, 0, 0, 1920, 1080, 1}, dst = {0, 0, 0, 2560, 1440, 1};
+    const NVNcopyRegion src = {0, 0, 0, 1920, 1080, 1}, dst = {0, 0, 0, (int)out.width, (int)out.height, 1};
     if (!copy_t2t_draw(in, out, 0, 0, 0, 0, &src, &dst, 1, 0)) return 0;
     static int once;
-    if (!once++) MLOG("NDVE movie: scaling the decoded RGBA frame directly from 1920x1080 to 2560x1440");
+    if (!once++) MLOG("NDVE movie: scaling the decoded RGBA frame directly from 1920x1080 to %lux%lu", (unsigned long)out.width, (unsigned long)out.height);
     return 1;
 }
 // nvnCommandBufferDrawTexture: the source region of a texture (texels, through the handle's sampler) drawn into the destination region of each bound colour target (pixels in the window's

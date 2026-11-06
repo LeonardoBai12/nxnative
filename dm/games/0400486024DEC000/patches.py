@@ -1,4 +1,4 @@
-"""Ocarina v131072's build-checked dynamic-resolution ceiling.
+"""Ocarina v131072's build-checked dynamic-resolution ceiling and real-time speed.
 
 The engine stores its final scale after dynamic and fixed-mode selection.
 State +0x10 holds the existing host DM_RENDER_SCALE setting.
@@ -35,11 +35,39 @@ def render_scale(ctx):
     ctx.render_scale = 1
 
 
-FRAME_STEP = {'e0f3ccfaf50065ae4ea01eb5aeb13b1a': render_scale}
+# Real-time speed. The frame loop (main+0x6e6be0) computes each frame's step as a constant over its target frame rate and never reads the clock: s1 is 60, or 30 in one mode of the game
+# (the fcsel at main+0x6e6cc0), s0 the target, so one frame is one step however long it took and everything runs slowly below the target. Found by gunvalk (zortos293/Lichii PR #216).
+# The stub keeps that division and takes the larger of it and s1 x the measured frame time (state +0x38, float seconds, hle_nvn.c): 0 there leaves the game's own step, and the step is
+# never below it. It marks state +0x3c so the host measures only for a main that reads the value. x16, x17 and s0 are not read again before they are written after the site
+def real_speed(ctx):
+    here, emit = ctx.here, ctx.emit
+    ctx.site(0x6e6cc4, '2818201e')
+    start = here()
+    emit(0x1e201828)                       # fdiv s8,s1,s0        the game's own step
+    emit(ADRP(16, here(), ctx.state))
+    for w in (0x52800031,   # mov w17,#1
+              0xb9003e11,   # str w17,[x16,#0x3c]  this main reads the frame time
+              0xbd403a00,   # ldr s0,[x16,#0x38]   seconds; 0 = at the target
+              0x1e210800,   # fmul s0,s0,s1
+              0x1e204908):  # fmax s8,s8,s0
+        emit(w)
+    emit(B(here(), 0x6e6cc8))
+    ctx.put(0x6e6cc4, [B(0x6e6cc4, start)], 'frame step from the measured frame time, never below the game\'s own (state +0x38)')
+
+
+def frame_step(ctx):
+    render_scale(ctx)
+    real_speed(ctx)
+
+
+FRAME_STEP = {'e0f3ccfaf50065ae4ea01eb5aeb13b1a': frame_step}   # 1.1.1 (v131072), the main of v0 too
 
 BINDING = [
     {'what': 'dynamic-resolution ceiling', 'now': 'build', 'goal': 'game', 'purpose': 'rendering',
      'why': "the game's final scale store follows its dynamic and fixed-mode choices",
      'blocked': 'the store and its role are verified for this main build only',
      'checked': 'v131072 main E0F3CCFAF50065AE4EA01EB5AEB13B1A, original store and surrounding code, 2026-11-06'},
+    {'what': 'frame step from the measured frame time', 'now': 'build', 'goal': 'game', 'purpose': 'frame rate',
+     'why': "this game's own frame loop; the frame-step state page is general",
+     'blocked': 'frame-step stubs have no function-matched form yet'},
 ]
